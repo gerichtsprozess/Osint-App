@@ -22,11 +22,13 @@ def load_json(file):
         except: return {} if file != LOGIN_LOG_FILE else []
 
 def init_files():
+    # Benutzer initialisieren
     if not os.path.exists(USERS_FILE):
-        save_json(USERS_FILE, {
+        save_json(USERS_FILE,{
             "Gerichtsprozess":{"password":"140610","role":"admin"},
             "Frozen":{"password":"Ghost1441","role":"user"}
         })
+    # Uploads und Logs initialisieren
     for file, default in [(UPLOADS_FILE, {}), (LOGIN_LOG_FILE, [])]:
         if not os.path.exists(file):
             save_json(file, default)
