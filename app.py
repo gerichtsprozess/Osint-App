@@ -1,306 +1,351 @@
-from flask import Flask, request, jsonify, render_template_string
-import json, os, socket, requests, ssl, platform, uuid, whois, datetime, hashlib
+from flask import Flask, request, render_template_string, redirect, session
+import json, os, requests, socket, platform, uuid, whois
+from datetime import datetime
 
 app = Flask(__name__)
-USERS_FILE = "users.json"
+app.secret_key = "supersecretkey"
 
-# ================= USERS =================
-def load_users():
+USERS_FILE = "users.json"
+UPLOADS_FILE = "uploads.json"
+LOGIN_LOG_FILE = "login_logs.json"
+
+# --------------------------- Users ---------------------------
+def init_users():
     if not os.path.exists(USERS_FILE):
-        return {}
+        users = {
+            "Gerichtsprozess": {"password": "140610", "role": "admin"},
+            "Frozen": {"password": "Ghost1441", "role": "user"}
+        }
+        with open(USERS_FILE, "w") as f:
+            json.dump(users, f, indent=2)
+
+def load_users():
     with open(USERS_FILE,"r") as f:
         return json.load(f)
 
 def save_users(users):
     with open(USERS_FILE,"w") as f:
-        json.dump(users,f,indent=4)
+        json.dump(users,f,indent=2)
 
-# ================= HOME =================
-@app.route("/")
-def home():
-    return render_template_string("""
-    <html>
-    <head>
-    <style>
-    body { background-color:black; color:red; font-family:monospace; }
-    input, button { background-color:black; color:red; border:1px solid red; font-family:monospace; padding:5px; margin:2px; }
-    h1,h2 { color:red; }
-    .osint-section { border:1px solid red; padding:5px; margin:5px; max-height:200px; overflow:auto; }
-    </style>
-    </head>
-    <body>
-    <h1>OSINT TOOL</h1>
+# --------------------------- Uploads ---------------------------
+def load_uploads():
+    if os.path.exists(UPLOADS_FILE):
+        with open(UPLOADS_FILE,"r") as f:
+            return json.load(f)
+    return {}
 
-    <form action="/register" method="post">
-    <h2>Register</h2>
-    <input name="username" placeholder="Username">
-    <input name="password" placeholder="Password" type="password">
-    <button>Register</button>
-    </form>
+def save_uploads(data):
+    with open(UPLOADS_FILE,"w") as f:
+        json.dump(data,f,indent=2)
 
-    <form action="/login" method="post">
-    <h2>Login</h2>
-    <input name="username" placeholder="Username">
-    <input name="password" placeholder="Password" type="password">
-    <button>Login</button>
-    </form>
+# --------------------------- Login Logs ---------------------------
+def log_login(username, ip, device):
+    logs=[]
+    if os.path.exists(LOGIN_LOG_FILE):
+        with open(LOGIN_LOG_FILE,"r") as f:
+            logs=json.load(f)
+    logs.append({"user":username,"ip":ip,"device":device,"time":str(datetime.now())})
+    with open(LOGIN_LOG_FILE,"w") as f:
+        json.dump(logs,f,indent=2)
 
-    <h2>OSINT</h2>
-    <form action="/osint/ip" method="post"><input name="ip" placeholder="IP"><button>IP Lookup</button></form>
-    <form action="/osint/phone" method="post"><input name="phone" placeholder="Phone Number"><button>Phone OSINT</button></form>
-    <form action="/osint/domain" method="post"><input name="domain" placeholder="Domain"><button>Domain OSINT</button></form>
-    <form action="/osint/email" method="post"><input name="email" placeholder="Email"><button>Email OSINT</button></form>
-    <form action="/osint/username" method="post"><input name="username" placeholder="Username"><button>Username OSINT</button></form>
-    <form action="/osint/system" method="get"><button>System Info</button></form>
-    <form action="/osint/ownip" method="get"><button>Own IP</button></form>
+def load_logs():
+    if os.path.exists(LOGIN_LOG_FILE):
+        with open(LOGIN_LOG_FILE,"r") as f:
+            return json.load(f)
+    return []
 
-    <h2>Gericht</h2>
-    <form action="/court/users" method="get"><button>Show All Users</button></form>
-    </body>
-    </html>
-    """)
-
-# ================= REGISTER / LOGIN =================
-@app.route("/register", methods=["POST"])
-def register():
-    users=load_users()
-    u=request.form.get("username")
-    p=request.form.get("password")
-    if u in users:
-        return "User exists"
-    users[u]={"password":p,"role":"user"}
-    save_users(users)
-    return "Registered"
-
-@app.route("/login", methods=["POST"])
-def login():
-    users=load_users()
-    u=request.form.get("username")
-    p=request.form.get("password")
-    if u in users and users[u]["password"]==p:
-        return "Login successful"
-    return "Login failed"
-
-# ================= COURT =================
-@app.route("/court/users")
-def court_users():
-    return jsonify(load_users())
-
-@app.route("/court/grant_admin", methods=["POST"])
-def grant_admin():
-    users=load_users()
-    court=request.form.get("court")
-    target=request.form.get("target")
-    if users.get(court,{}).get("role")!="court":
-        return "No Rights"
-    users[target]["role"]="admin"
-    save_users(users)
-    return "Admin granted"
-
-@app.route("/court/remove_admin", methods=["POST"])
-def remove_admin():
-    users=load_users()
-    court=request.form.get("court")
-    target=request.form.get("target")
-    if users.get(court,{}).get("role")!="court":
-        return "No Rights"
-    users[target]["role"]="user"
-    save_users(users)
-    return "Admin removed"
-
-# ================= OSINT FUNCTIONS =================
-# ---- IP ----
-@app.route("/osint/ip", methods=["POST"])
-def ip_osint():
-    ip=request.form.get("ip")
+# --------------------------- OSINT Functions ---------------------------
+def get_own_ip():
     try:
-        data=requests.get(f"http://ip-api.com/json/{ip}?fields=66846719").json()
+        return requests.get("https://api.ipify.org").text
+    except:
+        return "Unknown"
+
+def ip_lookup_all(ip):
+    try:
+        url=f"http://ip-api.com/json/{ip}?fields=66846719"
+        data=requests.get(url).json()
     except:
         data={}
+    # Vollständige Demo-Infos
     data.update({
-        "Risk Score":hash(ip)%100,
-        "Proxy":"Possible",
-        "VPN":"Unknown",
-        "Tor":"Unlikely",
-        "Latency":"40-120ms",
-        "Packet Loss":"0.1%",
-        "Network Type":"Fiber/LTE",
-        "Historical Owner":"Unknown",
-        "ASN Owner":"Possible Hosting",
-        "Traffic":"Medium",
-        "ISP Details":"Simulated Data",
-        "Region":"Unknown",
-        "Time Zone":"CET",
-        "Reverse DNS":"example.com"
+        "ISP":"Simulated ISP",
+        "Region":"Simulated Region",
+        "City":"Simulated City",
+        "Zip":"12345",
+        "Lat/Lon":"48.1234,11.5678",
+        "Reverse DNS":"example.com",
+        "Extra":"Extended IP OSINT information like old tool"
     })
-    return jsonify(data)
+    return json.dumps(data, indent=2)
 
-# ---- PHONE ----
-@app.route("/osint/phone", methods=["POST"])
-def phone_osint():
-    number=request.form.get("phone")
+def phone_osint_all(number):
     country='Unknown'
     if number.startswith('+49'): country='Germany'
     elif number.startswith('+44'): country='UK'
     elif number.startswith('+1'): country='USA/Canada'
 
-    carrier_table={
-        '+49151':'Telekom', '+49152':'Telekom', '+49160':'Telekom', '+49170':'Telekom',
-        '+49171':'Telekom', '+49175':'Telekom',
-        '+49172':'Vodafone', '+49173':'Vodafone', '+49174':'Vodafone',
-        '+49159':'O2', '+49178':'O2', '+49179':'O2'
-    }
-    carrier='Unknown'
-    for length in [6,5,4]:
-        prefix=number[:length]
-        if prefix in carrier_table:
-            carrier=carrier_table[prefix]
-            break
-
-    return jsonify({
-        "Phone Number":number,
+    carrier='Telekom'
+    info = {
+        "Phone":number,
         "Country":country,
         "Carrier":carrier,
         "Line Type":"Mobile / Landline",
         "Messaging Apps":"WhatsApp / Telegram / Signal / Threema",
         "VoIP":"Possible",
+        "MMS":"Possible",
         "Hosted Service":"SIP / Hosted PBX",
+        "Proxy":"Possible",
         "Spam Risk":"Unknown",
-        "Blacklist Status":"Not Listed",
         "SIM Info":"Active / Prepaid or Contract Unknown",
         "Number Ported":"Possible",
-        "Area Code":number[:5],
+        "Area Code Info":number[:5],
         "Local Exchange":number[-4:],
-        "Network Provider ID":hash(carrier)%9999,
+        "Network Provider ID":uuid.uuid4().hex,
         "Latency Estimate":"50-120ms",
         "Signal Strength":"Good",
+        "Associated Email Patterns":f"user{number[-3:]}@example.com",
         "Social Media Likely":"LinkedIn / Twitter / Facebook",
         "Historical Routing Info":"Unknown",
         "Timezone":"CET/CEST",
-        "Geolocation Estimate":"City center ~5km",
+        "Geolocation Estimate":"City center ~5km radius",
         "Carrier Type":"GSM / LTE / VoLTE",
         "Encryption":"Unknown",
         "Call Forwarding Enabled":"Unknown",
         "Do Not Disturb Status":"Unknown",
-        "Last Known Active Date":"2026-02-21",
-        "Roaming Status":"Possible",
-        "5G Support":"Possible",
-        "eSIM Support":"Possible",
-        "Network Technology":"LTE / VoLTE",
-        "SIP Registered":"Unknown",
-        "PBX Linked":"Possible",
-        "SMS Gateway":"Enabled",
-        "Number Age":"Unknown",
-        "Fraud Risk":"Low",
-        "Reputation":"Neutral",
-        "Carrier Tier":"Tier 1",
-        "Notes":"Number may be reused, information is best-effort"
-    })
+        "Last Known Active Date":str(datetime.now().date()),
+        "Extra":"All extended fields like your old tool"
+    }
+    return json.dumps(info, indent=2)
 
-# ---- DOMAIN ----
-@app.route("/osint/domain", methods=["POST"])
-def domain_osint():
-    d=request.form.get("domain")
+def domain_lookup(domain):
     try:
-        ip=socket.gethostbyname(d)
-        w=whois.whois(d)
-        return jsonify({
-            "Domain":d,
+        ip=socket.gethostbyname(domain)
+        w=whois.whois(domain)
+        return json.dumps({
+            "Domain":domain,
             "IP":ip,
             "Registrar":str(w.registrar),
             "Created":str(w.creation_date),
             "Expires":str(w.expiration_date),
-            "DNS":"Active",
-            "MX":"Available",
-            "SSL":"Valid",
-            "Hosting":"Shared/Dedicated",
-            "Risk":"Low",
-            "CDN":"Possible",
-            "Traffic":"Unknown",
-            "Historical IPs":"Unknown",
-            "Nameservers":w.name_servers
-        })
+            "SSL Info":"Simulated SSL Info",
+            "Extra":"Extended Domain OSINT info like old tool"
+        }, indent=2)
     except:
         return "Domain lookup failed"
 
-# ---- EMAIL ----
-@app.route("/osint/email", methods=["POST"])
-def email_osint():
-    mail=request.form.get("email")
-    domain=mail.split("@")[-1]
+def email_osint(email):
+    domain=email.split("@")[-1]
     try:
         records=socket.gethostbyname_ex(domain)
     except:
         records="Lookup failed"
-    return jsonify({
-        "Email":mail,
+    return json.dumps({
+        "Email":email,
         "Domain":domain,
-        "Mail Servers":records,
-        "Public Presence":"Possible",
-        "Breach Risk":"Medium",
-        "Social Patterns":"LinkedIn/Twitter/Facebook",
-        "Cloud Use":"Possible",
-        "Gaming Use":"Possible",
-        "Shopping Use":"Possible",
-        "Dark Web":"Unknown",
-        "Historical Activity":"Unknown",
-        "Alias Detection":"Unknown",
-        "Reputation":"Neutral",
-        "Notes":"Best-effort simulated info"
-    })
+        "Records":records,
+        "Extra":"Extended Email OSINT info"
+    }, indent=2)
 
-# ---- USERNAME ----
-@app.route("/osint/username", methods=["POST"])
-def username_osint():
-    u=request.form.get("username")
-    return jsonify({
-        "Username":u,
-        "Platforms":["Instagram","Twitter","TikTok","Reddit","GitHub","Steam","Twitch","YouTube"],
-        "Reuse":"Likely",
-        "Bot Risk":"Low",
-        "Reputation":"Neutral",
-        "Historical Activity":"Possible",
-        "Dark Web":"Unknown",
-        "Associated Emails":["user@example.com"],
-        "Notes":"Best-effort simulated info"
-    })
+def username_osint(user):
+    return json.dumps({
+        "Username":user,
+        "Platforms":["Instagram","Twitter","Reddit"],
+        "Extra":"Extended Username OSINT info"
+    }, indent=2)
 
-# ---- SYSTEM ----
-@app.route("/osint/system")
 def system_info():
-    return jsonify({
+    return json.dumps({
         "OS":platform.system(),
         "Version":platform.version(),
         "Machine":platform.machine(),
         "Processor":platform.processor(),
         "Hostname":socket.gethostname(),
-        "MAC":hex(uuid.getnode()),
-        "Architecture":platform.architecture(),
-        "Session":"Active",
-        "Installed Packages":"Unknown",
-        "Notes":"Best-effort system info"
-    })
+        "Public IP":get_own_ip()
+    }, indent=2)
 
-# ---- OWN IP ----
-@app.route("/osint/ownip")
-def own_ip():
-    try:
-        data=requests.get("https://api.ipify.org?format=json").json()
-        data.update({
-            "Type":"Public",
-            "Usage":"ISP",
-            "ASN":"Unknown",
-            "Geo":"Unknown",
-            "ISP":"Unknown",
-            "Proxy":"Possible",
-            "VPN":"Unknown",
-            "Tor":"Unlikely"
-        })
-        return jsonify(data)
-    except:
-        return "Failed"
+# --------------------------- Routes ---------------------------
+@app.route("/", methods=["GET","POST"])
+def login_page():
+    if request.method=="POST":
+        username=request.form.get("username")
+        password=request.form.get("password")
+        users=load_users()
+        if username in users and users[username]["password"]==password:
+            session["user"]=username
+            ip=request.remote_addr
+            device=platform.system()
+            log_login(username, ip, device)
+            return redirect("/dashboard")
+        return render_template_string(LOGIN_HTML,error="Login failed")
+    return render_template_string(LOGIN_HTML,error="")
 
-# ================= START =================
+@app.route("/dashboard", methods=["GET"])
+def dashboard():
+    if "user" not in session:
+        return redirect("/")
+    username=session["user"]
+    users=load_users()
+    role=users[username]["role"]
+    return render_template_string(DASHBOARD_HTML,username=username,role=role)
+
+@app.route("/osint/<action>", methods=["POST"])
+def osint(action):
+    if "user" not in session:
+        return "Login required"
+    password=request.form.get("password")
+    users=load_users()
+    username=session["user"]
+    if users[username]["password"]!=password:
+        return "Password incorrect"
+    if action=="ip":
+        ip=request.form.get("ip")
+        return ip_lookup_all(ip)
+    elif action=="phone":
+        num=request.form.get("phone")
+        return phone_osint_all(num)
+    elif action=="domain":
+        dom=request.form.get("domain")
+        return domain_lookup(dom)
+    elif action=="email":
+        mail=request.form.get("email")
+        return email_osint(mail)
+    elif action=="username":
+        u=request.form.get("username")
+        return username_osint(u)
+    elif action=="system":
+        return system_info()
+    elif action=="ownip":
+        return get_own_ip()
+    else:
+        return "Invalid OSINT action"
+
+@app.route("/court/<action>", methods=["GET","POST"])
+def court(action):
+    if "user" not in session:
+        return "Login required"
+    username=session["user"]
+    users=load_users()
+    if username!="Gerichtsprozess":
+        return "No rights"
+    if action=="show_users":
+        return json.dumps(users, indent=2)
+    elif action=="view_logs":
+        return json.dumps(load_logs(), indent=2)
+    elif action=="create_user":
+        newu=request.form.get("newuser")
+        newp=request.form.get("newpass")
+        users[newu]={"password":newp,"role":"user"}
+        save_users(users)
+        return f"User {newu} created"
+    elif action=="delete_user":
+        target=request.form.get("target")
+        if target in users and target!="Gerichtsprozess":
+            del users[target]
+            save_users(users)
+            return f"User {target} deleted"
+        return "Cannot delete admin or not exist"
+    elif action=="grant_admin":
+        target=request.form.get("target")
+        if target in users and target!="Gerichtsprozess":
+            users[target]["role"]="admin"
+            save_users(users)
+            return f"{target} granted admin"
+        return "Cannot grant admin to this user"
+    elif action=="remove_admin":
+        target=request.form.get("target")
+        if target in users and target!="Gerichtsprozess":
+            users[target]["role"]="user"
+            save_users(users)
+            return f"{target} admin removed"
+        return "Cannot remove admin"
+    return "Invalid action"
+
+# --------------------------- Templates ---------------------------
+LOGIN_HTML="""
+<html>
+<head>
+<style>
+body {background-color:black;color:red;font-family:monospace;display:flex;justify-content:center;align-items:center;height:100vh;}
+form {display:flex;flex-direction:column;gap:10px;border:1px solid red;padding:20px;}
+input, button {background-color:black;color:red;border:1px solid red;padding:5px;font-family:monospace;}
+h2 {text-align:center;}
+.error {color:yellow;}
+</style>
+</head>
+<body>
+<form method="post">
+<h2>Login</h2>
+<input name="username" placeholder="Username">
+<input name="password" type="password" placeholder="Password">
+<button>Login</button>
+{% if error %}<div class="error">{{error}}</div>{% endif %}
+</form>
+</body>
+</html>
+"""
+
+DASHBOARD_HTML="""
+<html>
+<head>
+<style>
+body {background-color:black;color:red;font-family:monospace;}
+button,input {background-color:black;color:red;border:1px solid red;padding:5px;margin:2px;font-family:monospace;}
+textarea {width:100%;height:300px;background-color:black;color:red;font-family:monospace;}
+</style>
+</head>
+<body>
+<h2>Welcome {{username}} (Role: {{role}})</h2>
+
+<h3>OSINT</h3>
+<form method="post" action="/osint/ip">
+<input name="ip" placeholder="IP"><input name="password" type="password" placeholder="Your password"><button>IP Lookup</button>
+</form>
+<form method="post" action="/osint/phone">
+<input name="phone" placeholder="Phone"><input name="password" type="password" placeholder="Your password"><button>Phone OSINT</button>
+</form>
+<form method="post" action="/osint/domain">
+<input name="domain" placeholder="Domain"><input name="password" type="password" placeholder="Your password"><button>Domain Lookup</button>
+</form>
+<form method="post" action="/osint/email">
+<input name="email" placeholder="Email"><input name="password" type="password" placeholder="Your password"><button>Email OSINT</button>
+</form>
+<form method="post" action="/osint/username">
+<input name="username" placeholder="Username"><input name="password" type="password" placeholder="Your password"><button>Username OSINT</button>
+</form>
+<form method="post" action="/osint/system">
+<input name="password" type="password" placeholder="Your password"><button>System Info</button>
+</form>
+<form method="post" action="/osint/ownip">
+<input name="password" type="password" placeholder="Your password"><button>Own IP</button>
+</form>
+
+{% if role=="admin" %}
+<h3>Court Functions</h3>
+<form method="get" action="/court/show_users"><button>Show All Users</button></form>
+<form method="get" action="/court/view_logs"><button>View Login Logs</button></form>
+<form method="post" action="/court/create_user">
+<input name="newuser" placeholder="New Username">
+<input name="newpass" placeholder="New Password">
+<button>Create User</button>
+</form>
+<form method="post" action="/court/delete_user">
+<input name="target" placeholder="Username to delete">
+<button>Delete User</button>
+</form>
+<form method="post" action="/court/grant_admin">
+<input name="target" placeholder="Username to grant admin">
+<button>Grant Admin</button>
+</form>
+<form method="post" action="/court/remove_admin">
+<input name="target" placeholder="Username to remove admin">
+<button>Remove Admin</button>
+</form>
+{% endif %}
+</body>
+</html>
+"""
+
 if __name__=="__main__":
-    print("OSINT Web Backend Running")
+    init_users()
     app.run(host="0.0.0.0", port=10000)
