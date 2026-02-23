@@ -20,6 +20,8 @@ def init_users():
             json.dump(users, f, indent=2)
 
 def load_users():
+    if not os.path.exists(USERS_FILE):
+        init_users()
     with open(USERS_FILE,"r") as f:
         return json.load(f)
 
@@ -29,10 +31,11 @@ def save_users(users):
 
 # --------------------------- Uploads ---------------------------
 def load_uploads():
-    if os.path.exists(UPLOADS_FILE):
-        with open(UPLOADS_FILE,"r") as f:
-            return json.load(f)
-    return {}
+    if not os.path.exists(UPLOADS_FILE):
+        with open(UPLOADS_FILE,"w") as f:
+            json.dump({}, f)
+    with open(UPLOADS_FILE,"r") as f:
+        return json.load(f)
 
 def save_uploads(data):
     with open(UPLOADS_FILE,"w") as f:
@@ -41,18 +44,21 @@ def save_uploads(data):
 # --------------------------- Login Logs ---------------------------
 def log_login(username, ip, device):
     logs=[]
-    if os.path.exists(LOGIN_LOG_FILE):
-        with open(LOGIN_LOG_FILE,"r") as f:
-            logs=json.load(f)
+    if not os.path.exists(LOGIN_LOG_FILE):
+        with open(LOGIN_LOG_FILE,"w") as f:
+            json.dump([], f)
+    with open(LOGIN_LOG_FILE,"r") as f:
+        logs = json.load(f)
     logs.append({"user":username,"ip":ip,"device":device,"time":str(datetime.now())})
     with open(LOGIN_LOG_FILE,"w") as f:
         json.dump(logs,f,indent=2)
 
 def load_logs():
-    if os.path.exists(LOGIN_LOG_FILE):
-        with open(LOGIN_LOG_FILE,"r") as f:
-            return json.load(f)
-    return []
+    if not os.path.exists(LOGIN_LOG_FILE):
+        with open(LOGIN_LOG_FILE,"w") as f:
+            json.dump([], f)
+    with open(LOGIN_LOG_FILE,"r") as f:
+        return json.load(f)
 
 # --------------------------- OSINT Functions ---------------------------
 def get_own_ip():
@@ -67,7 +73,6 @@ def ip_lookup_all(ip):
         data=requests.get(url).json()
     except:
         data={}
-    # Vollständige Demo-Infos
     data.update({
         "ISP":"Simulated ISP",
         "Region":"Simulated Region",
@@ -84,7 +89,6 @@ def phone_osint_all(number):
     if number.startswith('+49'): country='Germany'
     elif number.startswith('+44'): country='UK'
     elif number.startswith('+1'): country='USA/Canada'
-
     carrier='Telekom'
     info = {
         "Phone":number,
@@ -120,14 +124,23 @@ def phone_osint_all(number):
 
 def domain_lookup(domain):
     try:
-        ip=socket.gethostbyname(domain)
-        w=whois.whois(domain)
+        try:
+            ip=socket.gethostbyname(domain)
+        except:
+            ip="Unavailable"
+        try:
+            w=whois.whois(domain)
+            registrar=str(w.registrar)
+            creation=str(w.creation_date)
+            expires=str(w.expiration_date)
+        except:
+            registrar=creation=expires="Unavailable"
         return json.dumps({
             "Domain":domain,
             "IP":ip,
-            "Registrar":str(w.registrar),
-            "Created":str(w.creation_date),
-            "Expires":str(w.expiration_date),
+            "Registrar":registrar,
+            "Created":creation,
+            "Expires":expires,
             "SSL Info":"Simulated SSL Info",
             "Extra":"Extended Domain OSINT info like old tool"
         }, indent=2)
@@ -348,4 +361,10 @@ textarea {width:100%;height:300px;background-color:black;color:red;font-family:m
 
 if __name__=="__main__":
     init_users()
+    if not os.path.exists(UPLOADS_FILE):
+        with open(UPLOADS_FILE,"w") as f:
+            json.dump({}, f)
+    if not os.path.exists(LOGIN_LOG_FILE):
+        with open(LOGIN_LOG_FILE,"w") as f:
+            json.dump([], f)
     app.run(host="0.0.0.0", port=10000)
