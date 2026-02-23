@@ -10,37 +10,40 @@ USERS_FILE = "users.json"
 UPLOADS_FILE = "uploads.json"
 LOGIN_LOG_FILE = "login_logs.json"
 
-# --------------------------- Initialisierung ---------------------------
-def init_files():
-    if not os.path.exists(USERS_FILE):
-        users = {
-            "Gerichtsprozess":{"password":"140610","role":"admin"},
-            "Frozen":{"password":"Ghost1441","role":"user"}
-        }
-        with open(USERS_FILE,"w") as f: json.dump(users,f,indent=2)
-    for file, default in [(UPLOADS_FILE,{}),(LOGIN_LOG_FILE,[])]: 
-        if not os.path.exists(file):
-            with open(file,"w") as f: json.dump(default,f,indent=2)
-
-def load_json(file): 
-    with open(file,"r") as f: return json.load(f)
-
-def save_json(file,data): 
+# --------------------------- Helfer ---------------------------
+def save_json(file, data):
     with open(file,"w") as f: json.dump(data,f,indent=2)
 
-# --------------------------- Login Logs ---------------------------
-def log_login(user,ip,device):
-    logs=load_json(LOGIN_LOG_FILE)
-    logs.append({"user":user,"ip":ip,"device":device,"time":str(datetime.now())})
-    save_json(LOGIN_LOG_FILE,logs)
+def load_json(file):
+    if not os.path.exists(file):
+        return {} if file != LOGIN_LOG_FILE else []
+    with open(file,"r") as f:
+        try: return json.load(f)
+        except: return {} if file != LOGIN_LOG_FILE else []
 
-# --------------------------- OSINT Funktionen ---------------------------
-def get_own_ip(): 
+def init_files():
+    if not os.path.exists(USERS_FILE):
+        save_json(USERS_FILE, {
+            "Gerichtsprozess":{"password":"140610","role":"admin"},
+            "Frozen":{"password":"Ghost1441","role":"user"}
+        })
+    for file, default in [(UPLOADS_FILE, {}), (LOGIN_LOG_FILE, [])]:
+        if not os.path.exists(file):
+            save_json(file, default)
+
+def log_login(user, ip, device):
+    logs = load_json(LOGIN_LOG_FILE)
+    logs.append({"user":user,"ip":ip,"device":device,"time":str(datetime.now())})
+    save_json(LOGIN_LOG_FILE, logs)
+
+# --------------------------- OSINT ---------------------------
+def get_own_ip():
     try: return {"Public IP": requests.get("https://api.ipify.org").text}
     except: return {"Public IP":"Unknown"}
 
 def ip_lookup_all(ip):
-    try: data=requests.get(f"http://ip-api.com/json/{ip}?fields=66846719").json()
+    try:
+        data=requests.get(f"http://ip-api.com/json/{ip}?fields=66846719").json()
     except: data={}
     data.update({
         "ISP":"Simulated ISP","Region":"Simulated Region","City":"Simulated City",
@@ -109,7 +112,7 @@ def system_info():
     try:
         hostname=socket.gethostname()
         local_ip=socket.gethostbyname(hostname)
-    except: local_ip="Unknown"
+    except: hostname=local_ip="Unknown"
     return {
         "OS":platform.system(),"Version":platform.version(),
         "Machine":platform.machine(),"Processor":platform.processor(),
@@ -117,15 +120,14 @@ def system_info():
     }
 
 # --------------------------- Templates ---------------------------
-LOGIN_HTML="""
+LOGIN_HTML = """
 <html><head>
 <style>
 body{background:black;color:red;font-family:monospace;display:flex;justify-content:center;align-items:center;height:100vh;}
 form{display:flex;flex-direction:column;gap:10px;border:1px solid red;padding:20px;}
 input,button{background:black;color:red;border:1px solid red;padding:5px;font-family:monospace;}
 h2{text-align:center;} .error{color:yellow;}
-</style>
-</head>
+</style></head>
 <body>
 <form method="post"><h2>Login</h2>
 <input name="username" placeholder="Username">
@@ -136,7 +138,7 @@ h2{text-align:center;} .error{color:yellow;}
 </body></html>
 """
 
-DASHBOARD_HTML="""
+DASHBOARD_HTML = """
 <html><head><style>
 body{background:black;color:red;font-family:monospace;text-align:center;}
 button,input{background:black;color:red;border:1px solid red;padding:5px;margin:2px;font-family:monospace;}
@@ -163,7 +165,7 @@ button,input{background:black;color:red;border:1px solid red;padding:5px;margin:
 </body></html>
 """
 
-INPUT_HTML="""
+INPUT_HTML = """
 <html><head><style>
 body{background:black;color:red;font-family:monospace;text-align:center;}
 input,button{background:black;color:red;border:1px solid red;padding:5px;margin:2px;font-family:monospace;}
@@ -178,7 +180,7 @@ input,button{background:black;color:red;border:1px solid red;padding:5px;margin:
 </body></html>
 """
 
-RESULT_HTML="""
+RESULT_HTML = """
 <html><head><style>
 body{background:black;color:red;font-family:monospace;text-align:center;}
 pre{background:black;color:red;font-family:monospace;text-align:left;margin:auto;padding:10px;border:1px solid red;width:80%;overflow:auto;}
@@ -206,7 +208,7 @@ def login():
             session["user"]=username
             ip=request.remote_addr
             device=platform.system()
-            log_login(username,ip,device)
+            log_login(username, ip, device)
             return redirect("/dashboard")
         error="Login failed"
     return render_template_string(LOGIN_HTML,error=error)
@@ -216,8 +218,8 @@ def dashboard():
     if "user" not in session: return redirect("/")
     username=session["user"]
     users=load_json(USERS_FILE)
-    role=users[username]["role"]
-    return render_template_string(DASHBOARD_HTML,username=username,role=role)
+    role=users.get(username,{}).get("role","user")
+    return render_template_string(DASHBOARD_HTML, username=username, role=role)
 
 @app.route("/input/<action>",methods=["GET","POST"])
 def input_page(action):
@@ -225,9 +227,10 @@ def input_page(action):
     needs_input = action not in ["ownip","system"]
     if request.method=="POST":
         pwd=request.form.get("password")
-        users=load_json(USERS_FILE)
         username=session["user"]
-        if users[username]["password"]!=pwd: return "Password incorrect"
+        users=load_json(USERS_FILE)
+        if users.get(username,{}).get("password","") != pwd:
+            return "Password incorrect"
         value=request.form.get("value","")
         return redirect(f"/result/{action}?v={value}")
     return render_template_string(INPUT_HTML,action=action,needs_input=needs_input)
@@ -236,47 +239,47 @@ def input_page(action):
 def result_page(action):
     if "user" not in session: return redirect("/")
     value=request.args.get("v","")
-    if action=="ip": result=ip_lookup_all(value)
-    elif action=="phone": result=phone_osint_all(value)
-    elif action=="domain": result=domain_lookup(value)
-    elif action=="email": result=email_osint(value)
-    elif action=="username": result=username_osint(value)
-    elif action=="system": result=system_info()
-    elif action=="ownip": result=get_own_ip()
-    else: result={"Error":"Invalid action"}
+    try:
+        if action=="ip": result=ip_lookup_all(value)
+        elif action=="phone": result=phone_osint_all(value)
+        elif action=="domain": result=domain_lookup(value)
+        elif action=="email": result=email_osint(value)
+        elif action=="username": result=username_osint(value)
+        elif action=="system": result=system_info()
+        elif action=="ownip": result=get_own_ip()
+        else: result={"Error":"Invalid action"}
+    except Exception as e:
+        result={"Error":str(e)}
     return render_template_string(RESULT_HTML,action=action,result=result)
 
 # --------------------------- Gerichtsprozess ---------------------------
 @app.route("/court/<action>",methods=["GET","POST"])
 def court_page(action):
-    if "user" not in session or session["user"]!="Gerichtsprozess": return "No rights"
+    if session.get("user")!="Gerichtsprozess": return "No rights"
     users=load_json(USERS_FILE)
     if action=="show_users": return json.dumps(users,indent=2)
     elif action=="view_logs": return json.dumps(load_json(LOGIN_LOG_FILE),indent=2)
     elif action=="create_user" and request.method=="POST":
         newu=request.form.get("newuser")
         newp=request.form.get("newpass")
-        users[newu]={"password":newp,"role":"user"}
+        if newu and newp: users[newu]={"password":newp,"role":"user"}
         save_json(USERS_FILE,users)
         return f"User {newu} created"
     elif action=="delete_user" and request.method=="POST":
         target=request.form.get("target")
-        if target in users and target!="Gerichtsprozess":
-            del users[target]; save_json(USERS_FILE,users); return f"User {target} deleted"
+        if target in users and target!="Gerichtsprozess": del users[target]; save_json(USERS_FILE,users); return f"User {target} deleted"
         return "Cannot delete"
     elif action=="grant_admin" and request.method=="POST":
         target=request.form.get("target")
-        if target in users and target!="Gerichtsprozess":
-            users[target]["role"]="admin"; save_json(USERS_FILE,users); return f"{target} granted admin"
+        if target in users and target!="Gerichtsprozess": users[target]["role"]="admin"; save_json(USERS_FILE,users); return f"{target} granted admin"
         return "Cannot grant admin"
     elif action=="remove_admin" and request.method=="POST":
         target=request.form.get("target")
-        if target in users and target!="Gerichtsprozess":
-            users[target]["role"]="user"; save_json(USERS_FILE,users); return f"{target} admin removed"
+        if target in users and target!="Gerichtsprozess": users[target]["role"]="user"; save_json(USERS_FILE,users); return f"{target} admin removed"
         return "Cannot remove admin"
     return "Invalid court action"
 
 # --------------------------- Run ---------------------------
 if __name__=="__main__":
     init_files()
-    app.run(host="0.0.0.0",port=10000)
+    app.run(host="0.0.0.0", port=10000)
